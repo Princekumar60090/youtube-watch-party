@@ -1,0 +1,19 @@
+# Development profile.
+# Mongo stays off unless MONGODB_ENABLED=true.
+
+app:
+  mongodb:
+    enabled: ${MONGODB_ENABLED:false}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+  websocket:
+    allowed-origin-patterns: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
+
+management:
+  endpoint:
+    health:
+      show-details: when_authorized
+
+logging:
+  level:
+    com.watchparty: DEBUG

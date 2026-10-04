@@ -1,0 +1,32 @@
+# Production profile. Secrets must come from environment variables / platform config.
+# Do not exclude Mongo here — production requires MONGODB_URI.
+
+spring:
+  data:
+    mongodb:
+      uri: ${MONGODB_URI}
+      database: ${MONGODB_DATABASE:watchparty}
+
+app:
+  mongodb:
+    enabled: ${MONGODB_ENABLED:true}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS}
+  websocket:
+    allowed-origin-patterns: ${CORS_ALLOWED_ORIGINS}
+
+server:
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+
+management:
+  endpoint:
+    health:
+      show-details: never
+
+logging:
+  level:
+    root: INFO
+    com.watchparty: INFO

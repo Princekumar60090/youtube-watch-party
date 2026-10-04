@@ -1,0 +1,36 @@
+# Dependencies / builds
+node_modules/
+dist/
+dist-ssr/
+build/
+target/
+.vite/
+*.tsbuildinfo
+
+# Env / secrets — never commit these
+.env
+.env.*
+backend/.env
+frontend/.env
+*.pem
+*.p12
+*.key
+credentials*.json
+secrets.*
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Misc
+coverage/
+.turbo/
+.cache/
+HELP.md
