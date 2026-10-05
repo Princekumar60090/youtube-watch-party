@@ -71,7 +71,9 @@ export class StompRoomClient {
 
   private publish(destination: string, body: unknown): void {
     if (!this.client?.connected) {
-      throw new Error('Realtime connection is not ready');
+      throw new Error(
+        'Still connecting to the room. Wait until status shows Live, then try again.',
+      );
     }
     this.client.publish({
       destination,
