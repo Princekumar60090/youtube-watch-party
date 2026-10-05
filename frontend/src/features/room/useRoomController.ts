@@ -53,6 +53,20 @@ export function useRoomController(roomId: string) {
     }, 4200);
   }, []);
 
+  const friendlyError = useCallback((message: string | null | undefined): string => {
+    const raw = (message || '').toLowerCase();
+    if (raw.includes('host or moderator') || raw.includes('control playback')) {
+      return 'Only the host or a moderator can control playback. Please wait for them to play or pause the video.';
+    }
+    if (raw.includes('join the room over websocket')) {
+      return 'Connecting to the room… please try again in a moment.';
+    }
+    if (raw.includes('not a participant')) {
+      return 'You are not a member of this room. Please join again from the home page.';
+    }
+    return message || 'Something went wrong. Please try again.';
+  }, []);
+
   const applyParticipants = useCallback(
     (next: Participant[] | null | undefined, selfUserId: string) => {
       if (!next) return;
@@ -81,7 +95,7 @@ export function useRoomController(roomId: string) {
 
       switch (event.type) {
         case 'ERROR':
-          pushToast(event.message || 'Realtime error', 'error');
+          pushToast(friendlyError(event.message), 'error');
           break;
         case 'USER_JOINED':
           if (event.actorUserId !== userId) {
@@ -117,7 +131,7 @@ export function useRoomController(roomId: string) {
           break;
       }
     },
-    [applyParticipants, pushToast, userId],
+    [applyParticipants, friendlyError, pushToast, userId],
   );
 
   useEffect(() => {
@@ -221,5 +235,6 @@ export function useRoomController(roomId: string) {
     removeParticipant,
     transferHost,
     leave,
+    notify: pushToast,
   };
 }

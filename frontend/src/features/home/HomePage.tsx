@@ -17,7 +17,10 @@ export function HomePage() {
   const [submitting, setSubmitting] = useState(false);
 
   const headline = useMemo(
-    () => (mode === 'create' ? 'Open a room. Keep every screen in lockstep.' : 'Enter the code. Drop into the same frame.'),
+    () =>
+      mode === 'create'
+        ? 'Create a room and watch in sync'
+        : 'Join with a room code and watch together',
     [mode],
   );
 
@@ -47,7 +50,7 @@ export function HomePage() {
         setErrors(error.fieldErrors);
         setFormError(error.message);
       } else {
-        setFormError('Unable to reach the server. Is the backend running?');
+        setFormError('Unable to reach the server. Please make sure the backend is running.');
       }
     } finally {
       setSubmitting(false);
@@ -63,8 +66,8 @@ export function HomePage() {
         <p className="brand-mark">WatchParty</p>
         <h1>{headline}</h1>
         <p className="landing-lede">
-          A shared YouTube booth with host controls, live sync, and roles that actually enforce
-          themselves.
+          Host controls playback for everyone. Guests stay in sync automatically with clear roles
+          and permissions.
         </p>
 
         <div className="mode-switch" role="tablist" aria-label="Room entry mode">
@@ -89,13 +92,13 @@ export function HomePage() {
         </div>
 
         <form className="entry-form" onSubmit={onSubmit} noValidate>
-          <label htmlFor="username">Display name</label>
+          <label htmlFor="username">Name</label>
           <input
             id="username"
             name="username"
             value={username}
             onChange={(event) => setUsername(event.target.value)}
-            placeholder="e.g. Nova"
+            placeholder="Enter your name"
             autoComplete="nickname"
             maxLength={24}
           />
@@ -109,7 +112,7 @@ export function HomePage() {
                 name="roomCode"
                 value={roomCode}
                 onChange={(event) => setRoomCode(event.target.value.toUpperCase())}
-                placeholder="ABC123"
+                placeholder="Enter room code"
                 autoComplete="off"
                 maxLength={8}
               />
@@ -120,7 +123,7 @@ export function HomePage() {
           {formError && <p className="form-error">{formError}</p>}
 
           <button type="submit" className="entry-submit" disabled={submitting}>
-            {submitting ? 'Connecting…' : mode === 'create' ? 'Start the party' : 'Enter room'}
+            {submitting ? 'Please wait…' : mode === 'create' ? 'Start' : 'Join'}
           </button>
         </form>
       </section>

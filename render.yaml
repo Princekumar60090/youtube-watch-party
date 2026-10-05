@@ -1,0 +1,23 @@
+# Render Blueprint — backend API + WebSocket service
+# Dashboard: New > Blueprint > connect this repo
+# Set secret env vars when prompted (MONGODB_URI, CORS_ALLOWED_ORIGINS).
+
+services:
+  - type: web
+    name: youtube-watch-party-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    healthCheckPath: /actuator/health
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      - key: MONGODB_ENABLED
+        value: "true"
+      - key: MONGODB_DATABASE
+        value: watchparty
+      - key: MONGODB_URI
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false

@@ -10,7 +10,9 @@ spring:
       auto-index-creation: true
 
 server:
-  port: ${SERVER_PORT:8080}
+  # Render injects PORT; local/dev can still use SERVER_PORT.
+  port: ${PORT:${SERVER_PORT:8080}}
+  forward-headers-strategy: framework
   error:
     include-message: never
     include-binding-errors: never

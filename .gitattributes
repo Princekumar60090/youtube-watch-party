@@ -1,0 +1,8 @@
+* text=auto
+
+# Maven Wrapper must use LF or the Linux Docker build fails
+backend/mvnw text eol=lf
+backend/mvnw.cmd text eol=crlf
+
+*.sh text eol=lf
+Dockerfile text eol=lf

@@ -10,6 +10,9 @@ target/
 # Env / secrets — never commit these
 .env
 .env.*
+!.env.example
+!backend/.env.example
+!frontend/.env.example
 backend/.env
 frontend/.env
 *.pem

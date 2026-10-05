@@ -7,6 +7,7 @@ type YoutubeNamespace = {
       events?: {
         onReady?: (event: { target: YoutubePlayer }) => void;
         onStateChange?: (event: { data: number; target: YoutubePlayer }) => void;
+        onError?: (event: { data: number }) => void;
       };
     },
   ) => YoutubePlayer;
@@ -26,7 +27,11 @@ export type YoutubePlayer = {
   loadVideoById: (videoId: string, startSeconds?: number) => void;
   cueVideoById: (videoId: string, startSeconds?: number) => void;
   getCurrentTime: () => number;
+  getDuration: () => number;
   getPlayerState: () => number;
+  loadModule?: (module: string) => void;
+  unloadModule?: (module: string) => void;
+  setOption?: (module: string, option: string, value: unknown) => void;
   destroy: () => void;
 };
 
@@ -70,8 +75,25 @@ export function loadYoutubeApi(): Promise<YoutubeNamespace> {
 }
 
 export const YT_STATE = {
+  ENDED: 0,
   PLAYING: 1,
   PAUSED: 2,
   BUFFERING: 3,
   CUED: 5,
 } as const;
+
+export function youtubeErrorMessage(code: number): string {
+  switch (code) {
+    case 2:
+      return 'This YouTube link looks invalid. Please check the URL and try again.';
+    case 5:
+      return 'This video can’t play in the embedded player. Try a different video.';
+    case 100:
+      return 'This video is unavailable. It may be private or removed.';
+    case 101:
+    case 150:
+      return 'The video owner doesn’t allow playback in embedded players. Try another video.';
+    default:
+      return 'We couldn’t play this video right now. Please try another YouTube link.';
+  }
+}

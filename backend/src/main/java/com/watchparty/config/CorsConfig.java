@@ -22,7 +22,9 @@ public class CorsConfig {
     public CorsFilter corsFilter() {
         CorsConfiguration config = new CorsConfiguration();
         List<String> origins = appProperties.getCors().resolvedAllowedOrigins();
-        config.setAllowedOrigins(origins);
+        // Patterns support exact origins and wildcards (e.g. https://*.vercel.app).
+        // Allowed with credentials — unlike setAllowedOrigins("*").
+        config.setAllowedOriginPatterns(origins);
         config.setAllowedMethods(appProperties.getCors().resolvedAllowedMethods());
         config.addAllowedHeader(appProperties.getCors().getAllowedHeaders());
         config.setAllowCredentials(appProperties.getCors().isAllowCredentials());

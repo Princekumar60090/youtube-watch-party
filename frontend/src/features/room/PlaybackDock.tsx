@@ -5,9 +5,13 @@ type PlaybackDockProps = {
   canControl: boolean;
   playState: string;
   currentTime: number;
+  duration: number;
+  captionsOn: boolean;
   onPlay: () => void;
   onPause: () => void;
   onSeek: (time: number) => void;
+  onSkip: (deltaSeconds: number) => void;
+  onToggleCaptions: () => void;
   onChangeVideo: (input: string) => void;
 };
 
@@ -22,18 +26,25 @@ export function PlaybackDock({
   canControl,
   playState,
   currentTime,
+  duration,
+  captionsOn,
   onPlay,
   onPause,
   onSeek,
+  onSkip,
+  onToggleCaptions,
   onChangeVideo,
 }: PlaybackDockProps) {
   const [videoInput, setVideoInput] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [seekDraft, setSeekDraft] = useState(String(Math.floor(currentTime || 0)));
+  const [scrubbing, setScrubbing] = useState(false);
+  const [scrubValue, setScrubValue] = useState(currentTime);
 
   useEffect(() => {
-    setSeekDraft(String(Math.floor(currentTime || 0)));
-  }, [currentTime]);
+    if (!scrubbing) {
+      setScrubValue(currentTime || 0);
+    }
+  }, [currentTime, scrubbing]);
 
   const submitVideo = (event: FormEvent) => {
     event.preventDefault();
@@ -47,13 +58,22 @@ export function PlaybackDock({
     setVideoInput('');
   };
 
+  const safeDuration = Math.max(duration || 0, 0);
+  const progressMax = safeDuration > 0 ? safeDuration : Math.max(scrubValue, 1);
+
   if (!canControl) {
     return (
       <div className="dock dock-readonly">
-        <p className="dock-note">You’re in watch mode. Playback follows the host/moderator.</p>
+        <div>
+          <p className="dock-note">Watching only — playback is controlled by the host or moderator.</p>
+          <p className="dock-hint">If the video is paused, please wait for them to resume it.</p>
+        </div>
         <div className="dock-meta">
-          <span>{playState === 'playing' ? 'Live sync' : 'Paused sync'}</span>
-          <span>{formatTime(currentTime)}</span>
+          <span>{playState === 'playing' ? 'Playing' : 'Paused'}</span>
+          <span>
+            {formatTime(currentTime)}
+            {safeDuration > 0 ? ` / ${formatTime(safeDuration)}` : ''}
+          </span>
         </div>
       </div>
     );
@@ -61,49 +81,68 @@ export function PlaybackDock({
 
   return (
     <div className="dock">
+      <div className="progress-block">
+        <input
+          className="progress-bar"
+          type="range"
+          min={0}
+          max={progressMax}
+          step={0.25}
+          value={Math.min(scrubValue, progressMax)}
+          aria-label="Video progress"
+          onMouseDown={() => setScrubbing(true)}
+          onTouchStart={() => setScrubbing(true)}
+          onChange={(event) => setScrubValue(Number(event.target.value))}
+          onMouseUp={(event) => {
+            setScrubbing(false);
+            onSeek(Number(event.currentTarget.value));
+          }}
+          onTouchEnd={(event) => {
+            setScrubbing(false);
+            onSeek(Number(event.currentTarget.value));
+          }}
+        />
+        <div className="progress-times">
+          <span>{formatTime(scrubValue)}</span>
+          <span>{safeDuration > 0 ? formatTime(safeDuration) : '--:--'}</span>
+        </div>
+      </div>
+
       <div className="dock-controls">
+        <button type="button" className="control-btn" onClick={() => onSkip(-10)} title="Back 10 seconds">
+          −10s
+        </button>
         <button
           type="button"
-          className="control-btn"
+          className="control-btn primary"
           onClick={() => (playState === 'playing' ? onPause() : onPlay())}
         >
           {playState === 'playing' ? 'Pause' : 'Play'}
         </button>
-        <label className="seek-field">
-          <span>Seek</span>
-          <input
-            type="number"
-            min={0}
-            step={1}
-            value={seekDraft}
-            onChange={(event) => setSeekDraft(event.target.value)}
-            onBlur={() => {
-              const value = Number(seekDraft);
-              if (!Number.isNaN(value) && value >= 0) onSeek(value);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                const value = Number(seekDraft);
-                if (!Number.isNaN(value) && value >= 0) onSeek(value);
-              }
-            }}
-          />
-          <em>{formatTime(currentTime)}</em>
-        </label>
+        <button type="button" className="control-btn" onClick={() => onSkip(10)} title="Forward 10 seconds">
+          +10s
+        </button>
+        <button
+          type="button"
+          className={`control-btn ${captionsOn ? 'active' : ''}`}
+          onClick={onToggleCaptions}
+        >
+          {captionsOn ? 'Captions on' : 'Captions off'}
+        </button>
       </div>
 
       <form className="video-form" onSubmit={submitVideo}>
-        <label htmlFor="video-input">Cue YouTube</label>
+        <label htmlFor="video-input">YouTube link</label>
         <div className="video-form-row">
           <input
             id="video-input"
             value={videoInput}
             onChange={(event) => setVideoInput(event.target.value)}
-            placeholder="Paste YouTube URL or video id"
+            placeholder="Paste a YouTube URL or video ID"
             autoComplete="off"
           />
           <button type="submit" className="control-btn accent">
-            Load
+            Load video
           </button>
         </div>
         {error && <p className="field-error">{error}</p>}
