@@ -7,7 +7,7 @@ Real-time synchronized YouTube watch rooms with role-based access.
 - **Frontend:** React + TypeScript + Vite
 - **Backend:** Spring Boot 3 (Java 21)
 - **Realtime:** WebSockets (STOMP)
-- **Database:** MongoDB Atlas (wired in Part 2)
+- **Database:** MongoDB Atlas
 
 ## Project structure
 
@@ -23,7 +23,7 @@ youtube-watch-party/
 - Java 21+
 - Maven 3.9+
 - Node.js 20+ / npm
-- MongoDB Atlas URI (needed from Part 2 onward)
+- MongoDB Atlas URI
 
 ## Environment setup
 
@@ -60,7 +60,7 @@ mvn spring-boot:run
 
 - API health: `http://localhost:8080/api/v1/health`
 - Actuator health: `http://localhost:8080/actuator/health`
-- WebSocket endpoint (Part 3): `http://localhost:8080/ws`
+- WebSocket endpoint: `http://localhost:8080/ws`
 
 ### Frontend
 
@@ -72,6 +72,13 @@ npm run dev
 
 Open `http://localhost:5173`
 
+### Using the app
+1. Start backend and frontend
+2. Create a room with a display name (you become Host)
+3. Copy the room code and join from another browser/profile as a guest
+4. Host/Moderator can load a YouTube URL, play/pause/seek
+5. Host can promote guests to Moderator, remove participants, or transfer host
+
 ## Profiles
 
 | Profile | Purpose |
@@ -79,7 +86,7 @@ Open `http://localhost:5173`
 | `dev`  | Default development; MongoDB disabled until enabled |
 | `prod` | Production; expects env-based secrets and MongoDB URI |
 
-## Room API (Part 2)
+## Room API
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -101,14 +108,28 @@ Example join-by-code body:
 { "roomCode": "ABC123", "username": "GuestUser" }
 ```
 
-## Current progress
+## WebSocket realtime API
 
-- [x] Part 1 — Foundation & skeleton
-- [x] Part 2 — Room APIs + MongoDB
-- [ ] Part 3 — WebSocket sync + RBAC
-- [ ] Part 4 — Frontend watch party UX
-- [ ] Part 5 — Production deploy + docs
+Endpoint: `ws://localhost:8080/ws` (SockJS also supported)
 
-## Live URL
+Flow:
+1. Create/join room with REST to get `roomId` + `userId`
+2. Connect STOMP client to `/ws`
+3. Subscribe to `/topic/rooms/{roomId}`, `/user/queue/room`, `/user/queue/errors`
+4. Send join: destination `/app/room.join` with `{ "roomId", "userId" }`
 
-Will be added after deployment (Part 5).
+| Client destination | Payload | Who can send |
+|--------------------|---------|--------------|
+| `/app/room.join` | `{ roomId, userId }` | Room participant |
+| `/app/room.leave` | `{ roomId }` | Joined session |
+| `/app/room.play` | `{ roomId, currentTime? }` | Host / Moderator |
+| `/app/room.pause` | `{ roomId, currentTime? }` | Host / Moderator |
+| `/app/room.seek` | `{ roomId, time }` | Host / Moderator |
+| `/app/room.changeVideo` | `{ roomId, videoId }` | Host / Moderator |
+| `/app/room.assignRole` | `{ roomId, userId, role }` | Host |
+| `/app/room.removeParticipant` | `{ roomId, userId }` | Host |
+| `/app/room.transferHost` | `{ roomId, userId }` | Host |
+
+Server events on `/topic/rooms/{roomId}`: `SYNC_STATE`, `PLAY`, `PAUSE`, `SEEK`, `CHANGE_VIDEO`, `USER_JOINED`, `USER_LEFT`, `ROLE_ASSIGNED`, `PARTICIPANT_REMOVED`, `HOST_TRANSFERRED`, `ERROR`.
+
+Server keeps authoritative `videoId`, `playState`, and `currentTime` in MongoDB and rejects unauthorized control events.

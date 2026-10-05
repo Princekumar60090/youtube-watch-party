@@ -1,23 +1,27 @@
 package com.watchparty.config;
 
+import com.watchparty.websocket.WebSocketConnectInterceptor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
-/**
- * STOMP-over-WebSocket foundation for Part 3 realtime sync.
- * Controllers/handlers will be added later; this only registers the endpoint and broker.
- */
 @Configuration
 @EnableWebSocketMessageBroker
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     private final AppProperties appProperties;
+    private final ObjectProvider<WebSocketConnectInterceptor> connectInterceptorProvider;
 
-    public WebSocketConfig(AppProperties appProperties) {
+    public WebSocketConfig(
+            AppProperties appProperties,
+            ObjectProvider<WebSocketConnectInterceptor> connectInterceptorProvider
+    ) {
         this.appProperties = appProperties;
+        this.connectInterceptorProvider = connectInterceptorProvider;
     }
 
     @Override
@@ -39,5 +43,13 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
         registry.enableSimpleBroker("/topic", "/queue");
         registry.setApplicationDestinationPrefixes("/app");
         registry.setUserDestinationPrefix("/user");
+    }
+
+    @Override
+    public void configureClientInboundChannel(ChannelRegistration registration) {
+        WebSocketConnectInterceptor interceptor = connectInterceptorProvider.getIfAvailable();
+        if (interceptor != null) {
+            registration.interceptors(interceptor);
+        }
     }
 }
