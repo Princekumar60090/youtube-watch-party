@@ -28,11 +28,18 @@ import com.watchparty.websocket.RoomInteractionStore;
 import com.watchparty.websocket.RoomPresenceTracker;
 import com.watchparty.websocket.WsEventPublisher;
 import com.watchparty.websocket.WsSessionKeys;
+import jakarta.annotation.PreDestroy;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.stereotype.Service;
@@ -40,6 +47,8 @@ import org.springframework.stereotype.Service;
 @Service
 @ConditionalOnProperty(name = "app.mongodb.enabled", havingValue = "true")
 public class RoomRealtimeService {
+
+    private static final long DISCONNECT_GRACE_MS = 8_000L;
 
     private static final Set<String> ALLOWED_REACTIONS = Set.of(
             "👍", "👏", "❤️", "😂", "😮", "🔥", "🎉", "😢"
@@ -50,6 +59,12 @@ public class RoomRealtimeService {
     private final RoomPresenceTracker presenceTracker;
     private final RoomInteractionStore interactionStore;
     private final WsEventPublisher eventPublisher;
+    private final ScheduledExecutorService leaveScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "room-leave-grace");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private final Map<String, ScheduledFuture<?>> pendingDisconnectLeaves = new ConcurrentHashMap<>();
 
     public RoomRealtimeService(
             RoomService roomService,
@@ -65,10 +80,19 @@ public class RoomRealtimeService {
         this.eventPublisher = eventPublisher;
     }
 
+    @PreDestroy
+    void shutdownLeaveScheduler() {
+        pendingDisconnectLeaves.values().forEach(future -> future.cancel(false));
+        pendingDisconnectLeaves.clear();
+        leaveScheduler.shutdownNow();
+    }
+
     public void joinRoom(JoinRoomWsRequest request, SimpMessageHeaderAccessor accessor) {
         String sessionId = requireSessionId(accessor);
         Room room = roomService.requireActiveRoom(request.roomId());
         Participant participant = roomService.requireParticipant(room, request.userId());
+
+        boolean reconnected = cancelPendingDisconnectLeave(room.getId(), participant.getUserId());
 
         accessor.getSessionAttributes().put(WsSessionKeys.ROOM_ID, room.getId());
         accessor.getSessionAttributes().put(WsSessionKeys.USER_ID, participant.getUserId());
@@ -76,7 +100,7 @@ public class RoomRealtimeService {
         presenceTracker.connect(sessionId, room.getId(), participant.getUserId(), participant.getUsername());
 
         PlaybackStatePayload state = toState(room);
-        List<ParticipantResponse> participants = toParticipants(room);
+        List<ParticipantResponse> onlineParticipants = toOnlineParticipants(room);
         ChatPermissionsPayload permissions = interactionStore.getPermissions(room.getId());
 
         WsRoomEvent syncEvent = WsRoomEvent.of(
@@ -87,12 +111,33 @@ public class RoomRealtimeService {
                 null,
                 "Room state synchronized",
                 state,
-                participants,
+                onlineParticipants,
                 permissions,
                 null,
                 null
         );
         eventPublisher.sendToSession(sessionId, syncEvent);
+
+        if (reconnected) {
+            // Quiet presence refresh — avoids "left" then "joined" on brief socket drops.
+            eventPublisher.sendToRoom(
+                    room.getId(),
+                    WsRoomEvent.of(
+                            WsEventType.SYNC_STATE,
+                            room.getId(),
+                            participant.getUserId(),
+                            participant.getUsername(),
+                            null,
+                            "Participant reconnected",
+                            state,
+                            onlineParticipants,
+                            permissions,
+                            null,
+                            null
+                    )
+            );
+            return;
+        }
 
         WsRoomEvent joinedEvent = WsRoomEvent.of(
                 WsEventType.USER_JOINED,
@@ -102,21 +147,28 @@ public class RoomRealtimeService {
                 participant.getUserId(),
                 participant.getUsername() + " joined the room",
                 state,
-                participants
+                onlineParticipants
         );
         eventPublisher.sendToRoom(room.getId(), joinedEvent);
     }
 
     public void leaveRoom(LeaveRoomWsRequest request, SimpMessageHeaderAccessor accessor) {
         SessionActor actor = requireActorInRoom(accessor, request.roomId());
-        handleLeave(accessor.getSessionId(), actor.roomId(), actor.userId(), actor.username(), false);
+        cancelPendingDisconnectLeave(actor.roomId(), actor.userId());
+        presenceTracker.disconnect(accessor.getSessionId());
+        if (!presenceTracker.isOnline(actor.roomId(), actor.userId())) {
+            confirmLeave(actor.roomId(), actor.userId(), actor.username(), true);
+        }
         clearSession(accessor);
     }
 
     public void handleDisconnect(String sessionId) {
-        presenceTracker.disconnect(sessionId).ifPresent(presence ->
-                handleLeave(sessionId, presence.roomId(), presence.userId(), presence.username(), true)
-        );
+        presenceTracker.disconnect(sessionId).ifPresent(presence -> {
+            if (presenceTracker.isOnline(presence.roomId(), presence.userId())) {
+                return;
+            }
+            scheduleDisconnectLeave(presence.roomId(), presence.userId(), presence.username());
+        });
     }
 
     public void play(PlaybackControlWsRequest request, SimpMessageHeaderAccessor accessor) {
@@ -254,7 +306,7 @@ public class RoomRealtimeService {
                         actor.userId(),
                         actor.username(),
                         null,
-                        "Chat permissions updated",
+                        permissionUpdateMessage(request, permissions),
                         null,
                         null,
                         permissions,
@@ -262,6 +314,34 @@ public class RoomRealtimeService {
                         null
                 )
         );
+    }
+
+    private String permissionUpdateMessage(
+            SetChatPermissionsWsRequest request,
+            ChatPermissionsPayload permissions
+    ) {
+        if (request.reactionsEnabled() != null
+                && request.chatWithHostEnabled() == null
+                && request.chatWithEveryoneEnabled() == null) {
+            return permissions.reactionsEnabled()
+                    ? "Host enabled emoji reactions"
+                    : "Host disabled emoji reactions";
+        }
+        if (request.chatWithHostEnabled() != null
+                && request.chatWithEveryoneEnabled() == null
+                && request.reactionsEnabled() == null) {
+            return permissions.chatWithHostEnabled()
+                    ? "Host enabled chat with host"
+                    : "Host disabled chat with host";
+        }
+        if (request.chatWithEveryoneEnabled() != null
+                && request.chatWithHostEnabled() == null
+                && request.reactionsEnabled() == null) {
+            return permissions.chatWithEveryoneEnabled()
+                    ? "Host enabled chat with everyone"
+                    : "Host disabled chat with everyone";
+        }
+        return "Host updated chat permissions";
     }
 
     public void sendChat(SendChatWsRequest request, SimpMessageHeaderAccessor accessor) {
@@ -377,22 +457,39 @@ public class RoomRealtimeService {
         return channel.trim().toUpperCase(Locale.ROOT);
     }
 
-    private void handleLeave(
-            String sessionId,
-            String roomId,
-            String userId,
-            String username,
-            boolean fromDisconnect
-    ) {
-        // If user still has another active tab/session, do not broadcast leave yet.
-        if (presenceTracker.isOnline(roomId, userId) && fromDisconnect) {
-            return;
+    private void scheduleDisconnectLeave(String roomId, String userId, String username) {
+        String key = leaveKey(roomId, userId);
+        ScheduledFuture<?> previous = pendingDisconnectLeaves.remove(key);
+        if (previous != null) {
+            previous.cancel(false);
         }
-        if (!fromDisconnect) {
-            presenceTracker.disconnect(sessionId);
-            if (presenceTracker.isOnline(roomId, userId)) {
-                return;
-            }
+
+        ScheduledFuture<?> future = leaveScheduler.schedule(
+                () -> {
+                    pendingDisconnectLeaves.remove(key);
+                    if (presenceTracker.isOnline(roomId, userId)) {
+                        return;
+                    }
+                    confirmLeave(roomId, userId, username, false);
+                },
+                DISCONNECT_GRACE_MS,
+                TimeUnit.MILLISECONDS
+        );
+        pendingDisconnectLeaves.put(key, future);
+    }
+
+    private boolean cancelPendingDisconnectLeave(String roomId, String userId) {
+        ScheduledFuture<?> pending = pendingDisconnectLeaves.remove(leaveKey(roomId, userId));
+        if (pending == null) {
+            return false;
+        }
+        pending.cancel(false);
+        return true;
+    }
+
+    private void confirmLeave(String roomId, String userId, String username, boolean intentional) {
+        if (presenceTracker.isOnline(roomId, userId)) {
+            return;
         }
 
         Room room;
@@ -400,6 +497,25 @@ public class RoomRealtimeService {
             room = roomService.requireActiveRoom(roomId);
         } catch (RuntimeException ex) {
             return;
+        }
+
+        boolean isHost = userId.equals(room.getHostUserId());
+        if (intentional || !isHost) {
+            try {
+                room = roomService.leaveParticipant(roomId, userId);
+            } catch (RuntimeException ex) {
+                // Room may already be inactive / user already removed.
+                try {
+                    room = roomService.requireActiveRoom(roomId);
+                } catch (RuntimeException ignored) {
+                    interactionStore.clearRoom(roomId);
+                    return;
+                }
+            }
+        }
+
+        if (!room.isActive()) {
+            interactionStore.clearRoom(roomId);
         }
 
         eventPublisher.sendToRoom(
@@ -411,10 +527,14 @@ public class RoomRealtimeService {
                         username,
                         userId,
                         username + " left the room",
-                        toState(room),
-                        toParticipants(room)
+                        room.isActive() ? toState(room) : null,
+                        room.isActive() ? toOnlineParticipants(room) : List.of()
                 )
         );
+    }
+
+    private String leaveKey(String roomId, String userId) {
+        return roomId + ":" + userId;
     }
 
     private void broadcastControl(
@@ -434,7 +554,7 @@ public class RoomRealtimeService {
                         targetUserId,
                         message,
                         toState(room),
-                        toParticipants(room)
+                        toOnlineParticipants(room)
                 )
         );
 
@@ -519,6 +639,13 @@ public class RoomRealtimeService {
 
     private List<ParticipantResponse> toParticipants(Room room) {
         return roomMapper.toRoomResponse(room).participants();
+    }
+
+    /** Only people currently connected over WebSocket appear in the watching list. */
+    private List<ParticipantResponse> toOnlineParticipants(Room room) {
+        return toParticipants(room).stream()
+                .filter(participant -> presenceTracker.isOnline(room.getId(), participant.userId()))
+                .toList();
     }
 
     private record SessionActor(String roomId, String userId, String username) {

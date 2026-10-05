@@ -197,6 +197,23 @@ public class RoomService {
         return save(room);
     }
 
+    /**
+     * Participant leaves the room roster. Host leave deactivates the room.
+     */
+    public Room leaveParticipant(String roomId, String userId) {
+        Room room = requireActiveRoom(roomId);
+        requireParticipant(room, userId);
+
+        if (userId.equals(room.getHostUserId())) {
+            room.setActive(false);
+            room.getParticipants().removeIf(participant -> participant.getUserId().equals(userId));
+            return save(room);
+        }
+
+        room.getParticipants().removeIf(participant -> participant.getUserId().equals(userId));
+        return save(room);
+    }
+
     public Room transferHost(String roomId, String actorUserId, String targetUserId) {
         Room room = requireActiveRoom(roomId);
         Participant actor = requireParticipant(room, actorUserId);

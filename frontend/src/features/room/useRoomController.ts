@@ -183,6 +183,10 @@ export function useRoomController(roomId: string) {
 
       if (event.participants) {
         applyParticipants(event.participants, userId);
+      } else if (event.type === 'USER_LEFT' && event.actorUserId) {
+        setParticipants((current) =>
+          current.filter((participant) => participant.userId !== event.actorUserId),
+        );
       }
 
       switch (event.type) {
@@ -221,7 +225,7 @@ export function useRoomController(roomId: string) {
           break;
         case 'CHAT_PERMISSIONS':
           if (event.actorUserId !== userId) {
-            pushToast('Host updated chat permissions', 'info');
+            pushToast(event.message || 'Host updated chat permissions', 'info');
           }
           break;
         default:
