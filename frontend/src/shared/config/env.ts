@@ -1,9 +1,18 @@
+function firstUrlToken(raw: string): string {
+  // Vercel paste mistakes sometimes put the same URL twice on separate lines.
+  const token = raw
+    .split(/[\s,]+/)
+    .map((part) => part.trim())
+    .find((part) => /^https?:\/\//i.test(part) || /^wss?:\/\//i.test(part));
+  return (token || raw.trim()).replace(/\/$/, '');
+}
+
 function required(name: string, value: string | undefined, fallback: string): string {
-  const resolved = value?.trim() || fallback;
+  const resolved = firstUrlToken(value?.trim() || fallback);
   if (!resolved) {
     throw new Error(`Missing environment variable: ${name}`);
   }
-  return resolved.replace(/\/$/, '');
+  return resolved;
 }
 
 export const env = {

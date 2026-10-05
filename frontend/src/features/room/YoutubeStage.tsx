@@ -15,6 +15,7 @@ import {
 export type YoutubeStageHandle = {
   getCurrentTime: () => number;
   getDuration: () => number;
+  seekTo: (time: number) => void;
   setCaptions: (enabled: boolean) => void;
 };
 
@@ -56,6 +57,12 @@ export const YoutubeStage = forwardRef<YoutubeStageHandle, YoutubeStageProps>(
     useImperativeHandle(ref, () => ({
       getCurrentTime: () => playerRef.current?.getCurrentTime() || 0,
       getDuration: () => playerRef.current?.getDuration() || 0,
+      seekTo: (time: number) => {
+        const player = playerRef.current;
+        if (!player || !readyRef.current) return;
+        ignoreUntilRef.current = Date.now() + APPLY_GUARD_MS;
+        player.seekTo(time || 0, true);
+      },
       setCaptions: (enabled: boolean) => {
         const player = playerRef.current;
         if (!player) return;
@@ -162,8 +169,9 @@ export const YoutubeStage = forwardRef<YoutubeStageHandle, YoutubeStageProps>(
 
       if (!videoId) return;
 
+      // Catch up when behind/ahead of the host clock. Threshold keeps small jitter from seeking.
       const localTime = player.getCurrentTime() || 0;
-      if (Math.abs(localTime - (currentTime || 0)) > 1.25) {
+      if (Math.abs(localTime - (currentTime || 0)) > 0.9) {
         player.seekTo(currentTime || 0, true);
       }
 

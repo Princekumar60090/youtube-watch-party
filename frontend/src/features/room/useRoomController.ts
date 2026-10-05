@@ -7,8 +7,12 @@ import {
   updateLocalRole,
 } from '@/shared/session/roomSessionStorage';
 import type {
+  ChatChannel,
+  ChatMessage,
+  ChatPermissions,
   Participant,
   PlaybackState,
+  ReactionEvent,
   RoomRole,
   RoomSessionLocal,
   WsRoomEvent,
@@ -24,15 +28,24 @@ type Toast = {
   message: string;
 };
 
+type FloatingReaction = ReactionEvent & {
+  key: string;
+  left: number;
+};
+
+const MAX_CHAT_MESSAGES = 120;
+
 export function useRoomController(roomId: string) {
   const session = useMemo(() => loadRoomSessionFor(roomId), [roomId]);
   const socketRef = useRef(new StompRoomClient());
   const toastIdRef = useRef(1);
+  const hasInitialSyncRef = useRef(false);
 
   const [role, setRole] = useState<RoomRole>(session?.role ?? 'PARTICIPANT');
   const [username] = useState(session?.username ?? '');
   const [userId] = useState(session?.userId ?? '');
   const [roomCode, setRoomCode] = useState(session?.roomCode ?? '');
+  const [hostUserId, setHostUserId] = useState('');
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [playback, setPlayback] = useState<PlaybackState>({
     videoId: null,
@@ -44,6 +57,14 @@ export function useRoomController(roomId: string) {
   const [bootError, setBootError] = useState<string | null>(
     session ? null : 'Join this room from the home screen first.',
   );
+  const [permissions, setPermissions] = useState<ChatPermissions>({
+    chatWithHostEnabled: false,
+    chatWithEveryoneEnabled: false,
+    reactionsEnabled: false,
+  });
+  const [everyoneMessages, setEveryoneMessages] = useState<ChatMessage[]>([]);
+  const [hostMessages, setHostMessages] = useState<ChatMessage[]>([]);
+  const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
 
   const pushToast = useCallback((message: string, tone: Toast['tone'] = 'info') => {
     const id = toastIdRef.current++;
@@ -64,6 +85,9 @@ export function useRoomController(roomId: string) {
     if (raw.includes('not a participant')) {
       return 'You are not a member of this room. Please join again from the home page.';
     }
+    if (raw.includes('has not enabled')) {
+      return message || 'The host has not enabled this feature yet.';
+    }
     return message || 'Something went wrong. Please try again.';
   }, []);
 
@@ -71,6 +95,10 @@ export function useRoomController(roomId: string) {
     (next: Participant[] | null | undefined, selfUserId: string) => {
       if (!next) return;
       setParticipants(next);
+      const host = next.find((participant) => participant.role === 'HOST');
+      if (host) {
+        setHostUserId(host.userId);
+      }
       const me = next.find((participant) => participant.userId === selfUserId);
       if (me) {
         setRole(me.role);
@@ -80,19 +108,79 @@ export function useRoomController(roomId: string) {
     [],
   );
 
+  const appendChat = useCallback((message: ChatMessage) => {
+    const withTime: ChatMessage = {
+      ...message,
+      timestamp: message.timestamp || new Date().toISOString(),
+    };
+    if (withTime.channel === 'HOST') {
+      setHostMessages((current) => [...current, withTime].slice(-MAX_CHAT_MESSAGES));
+    } else {
+      setEveryoneMessages((current) => [...current, withTime].slice(-MAX_CHAT_MESSAGES));
+    }
+  }, []);
+
+  const spawnReaction = useCallback((reaction: ReactionEvent) => {
+    const key = `${reaction.reactionId}-${Date.now()}`;
+    const left = 12 + Math.random() * 76;
+    setFloatingReactions((current) => [...current, { ...reaction, key, left }]);
+    window.setTimeout(() => {
+      setFloatingReactions((current) => current.filter((item) => item.key !== key));
+    }, 2600);
+  }, []);
+
   const handleEventRef = useRef<(event: WsRoomEvent) => void>(() => undefined);
   const pushToastRef = useRef(pushToast);
   pushToastRef.current = pushToast;
 
   const handleEvent = useCallback(
     (event: WsRoomEvent) => {
-      if (event.state) {
-        setPlayback({
-          videoId: event.state.videoId,
-          playState: event.state.playState,
-          currentTime: event.state.currentTime,
+      if (event.permissions) {
+        setPermissions(event.permissions);
+      }
+
+      if (event.chat) {
+        appendChat({
+          ...event.chat,
+          timestamp: event.timestamp,
         });
       }
+
+      if (event.reaction) {
+        spawnReaction(event.reaction);
+      }
+
+      if (event.state) {
+        // Ignore own background time sync echoes so the progress bar doesn't tremble.
+        // Intentional SEEK / PLAY / PAUSE from this client still apply normally for guests only;
+        // controllers keep local authority for TIME_SYNC + SYNC_STATE echoes.
+        const ownSyncEcho =
+          event.actorUserId === userId &&
+          hasInitialSyncRef.current &&
+          (event.type === 'TIME_SYNC' || event.type === 'SYNC_STATE');
+
+        if (!ownSyncEcho) {
+          let nextTime = event.state.currentTime;
+          if (
+            (event.type === 'TIME_SYNC' || event.state.playState === 'playing') &&
+            event.timestamp &&
+            event.type !== 'PAUSE'
+          ) {
+            const sentAt = Date.parse(event.timestamp);
+            if (!Number.isNaN(sentAt) && event.state.playState === 'playing') {
+              const lagSec = Math.max(0, (Date.now() - sentAt) / 1000);
+              nextTime = event.state.currentTime + Math.min(lagSec, 2.5);
+            }
+          }
+          setPlayback({
+            videoId: event.state.videoId,
+            playState: event.state.playState,
+            currentTime: nextTime,
+          });
+          hasInitialSyncRef.current = true;
+        }
+      }
+
       if (event.participants) {
         applyParticipants(event.participants, userId);
       }
@@ -131,11 +219,16 @@ export function useRoomController(roomId: string) {
         case 'CHANGE_VIDEO':
           pushToast('New video locked in', 'success');
           break;
+        case 'CHAT_PERMISSIONS':
+          if (event.actorUserId !== userId) {
+            pushToast('Host updated chat permissions', 'info');
+          }
+          break;
         default:
           break;
       }
     },
-    [applyParticipants, friendlyError, pushToast, userId],
+    [appendChat, applyParticipants, friendlyError, pushToast, spawnReaction, userId],
   );
 
   handleEventRef.current = handleEvent;
@@ -145,11 +238,13 @@ export function useRoomController(roomId: string) {
 
     let cancelled = false;
     const connectUserId = session.userId;
+    hasInitialSyncRef.current = false;
 
     getRoomById(roomId)
       .then((room) => {
         if (cancelled) return;
         setRoomCode(room.roomCode);
+        setHostUserId(room.hostUserId);
         setParticipants(room.participants);
         setPlayback({
           videoId: room.videoId,
@@ -212,6 +307,7 @@ export function useRoomController(roomId: string) {
   const pause = (currentTime?: number) =>
     guarded(() => socketRef.current.pause(roomId, currentTime));
   const seek = (time: number) => guarded(() => socketRef.current.seek(roomId, time));
+  const syncTime = (time: number) => guarded(() => socketRef.current.syncTime(roomId, time));
   const changeVideo = (videoId: string) =>
     guarded(() => socketRef.current.changeVideo(roomId, videoId));
   const assignRole = (targetUserId: string, nextRole: RoomRole) =>
@@ -220,6 +316,15 @@ export function useRoomController(roomId: string) {
     guarded(() => socketRef.current.removeParticipant(roomId, targetUserId));
   const transferHost = (targetUserId: string) =>
     guarded(() => socketRef.current.transferHost(roomId, targetUserId));
+
+  const setChatPermissions = (next: Partial<ChatPermissions>) =>
+    guarded(() => socketRef.current.setChatPermissions(roomId, next));
+
+  const sendChat = (channel: ChatChannel, text: string) =>
+    guarded(() => socketRef.current.sendChat(roomId, channel, text.trim()));
+
+  const sendReaction = (emoji: string) =>
+    guarded(() => socketRef.current.sendReaction(roomId, emoji));
 
   const leave = () => {
     try {
@@ -231,26 +336,38 @@ export function useRoomController(roomId: string) {
     clearRoomSession();
   };
 
+  const isHost = role === 'HOST' || userId === hostUserId;
+
   return {
     session: session as RoomSessionLocal | null,
     bootError,
     role,
     username,
     userId,
+    hostUserId,
+    isHost,
     roomCode,
     participants,
     playback,
     connection,
     toasts,
+    permissions,
+    everyoneMessages,
+    hostMessages,
+    floatingReactions,
     canControl: canControlPlayback(role),
     canManage: canManageRoom(role),
     play,
     pause,
     seek,
+    syncTime,
     changeVideo,
     assignRole,
     removeParticipant,
     transferHost,
+    setChatPermissions,
+    sendChat,
+    sendReaction,
     leave,
     notify: pushToast,
   };

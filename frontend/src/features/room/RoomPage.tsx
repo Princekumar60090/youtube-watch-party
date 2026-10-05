@@ -2,14 +2,22 @@ import { useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ParticipantRail } from '@/features/room/ParticipantRail';
 import { PlaybackDock } from '@/features/room/PlaybackDock';
+import { ReactionBar } from '@/features/room/ReactionBar';
+import { ReactionOverlay } from '@/features/room/ReactionOverlay';
+import { RoomChatPanel } from '@/features/room/RoomChatPanel';
 import { YoutubeStage, type YoutubeStageHandle } from '@/features/room/YoutubeStage';
 import { useRoomController } from '@/features/room/useRoomController';
+
+/** Host/moderator broadcasts playback position while playing so guests stay close. */
+const HOST_SYNC_INTERVAL_MS = 4000;
 
 export function RoomPage() {
   const navigate = useNavigate();
   const { roomId = '' } = useParams<{ roomId: string }>();
   const room = useRoomController(roomId);
   const playerRef = useRef<YoutubeStageHandle>(null);
+  const lastHostSyncAtRef = useRef(0);
+  const scrubbingRef = useRef(false);
   const [duration, setDuration] = useState(0);
   const [displayTime, setDisplayTime] = useState(0);
   const [captionsOn, setCaptionsOn] = useState(false);
@@ -83,25 +91,51 @@ export function RoomPage() {
 
       <div className="room-layout">
         <section className="room-main">
-          <YoutubeStage
-            ref={playerRef}
-            videoId={room.playback.videoId}
-            playState={room.playback.playState}
-            currentTime={room.playback.currentTime}
-            canControl={room.canControl}
-            onLocalPlay={(time) => room.play(time)}
-            onLocalPause={(time) => room.pause(time)}
-            onTick={(time, nextDuration) => {
-              setDisplayTime(time);
-              if (nextDuration > 0) setDuration(nextDuration);
-            }}
-          />
+          <div className="stage-shell">
+            <YoutubeStage
+              ref={playerRef}
+              videoId={room.playback.videoId}
+              playState={room.playback.playState}
+              currentTime={room.playback.currentTime}
+              canControl={room.canControl}
+              onLocalPlay={(time) => room.play(time)}
+              onLocalPause={(time) => room.pause(time)}
+              onTick={(time, nextDuration) => {
+                if (!scrubbingRef.current) {
+                  setDisplayTime(time);
+                }
+                if (nextDuration > 0) setDuration(nextDuration);
+
+                if (
+                  scrubbingRef.current ||
+                  !room.canControl ||
+                  room.connection !== 'live' ||
+                  room.playback.playState !== 'playing' ||
+                  !room.playback.videoId
+                ) {
+                  return;
+                }
+
+                const now = Date.now();
+                if (now - lastHostSyncAtRef.current < HOST_SYNC_INTERVAL_MS) {
+                  return;
+                }
+                lastHostSyncAtRef.current = now;
+                room.syncTime(time);
+              }}
+            />
+            <ReactionOverlay reactions={room.floatingReactions} />
+          </div>
+
           <PlaybackDock
             canControl={room.canControl}
             playState={room.playback.playState}
             currentTime={activeTime}
             duration={duration}
             captionsOn={captionsOn}
+            onScrubbingChange={(scrubbing) => {
+              scrubbingRef.current = scrubbing;
+            }}
             onPlay={() => {
               const time = playerRef.current?.getCurrentTime() ?? room.playback.currentTime;
               room.play(time);
@@ -110,11 +144,17 @@ export function RoomPage() {
               const time = playerRef.current?.getCurrentTime() ?? room.playback.currentTime;
               room.pause(time);
             }}
-            onSeek={(time) => room.seek(time)}
+            onSeek={(time) => {
+              playerRef.current?.seekTo(time);
+              setDisplayTime(time);
+              room.seek(time);
+            }}
             onSkip={(delta) => {
               const now = playerRef.current?.getCurrentTime() ?? room.playback.currentTime;
               const max = playerRef.current?.getDuration() || duration || now + Math.abs(delta);
               const next = Math.max(0, Math.min(max, now + delta));
+              playerRef.current?.seekTo(next);
+              setDisplayTime(next);
               room.seek(next);
             }}
             onToggleCaptions={() => {
@@ -124,16 +164,35 @@ export function RoomPage() {
             }}
             onChangeVideo={(input) => room.changeVideo(input)}
           />
+
+          <ReactionBar
+            enabled={room.permissions.reactionsEnabled}
+            isHost={room.isHost}
+            connectionLive={room.connection === 'live'}
+            onReact={room.sendReaction}
+          />
         </section>
 
-        <ParticipantRail
-          participants={room.participants}
-          selfUserId={room.userId}
-          canManage={room.canManage}
-          onAssignRole={room.assignRole}
-          onRemove={room.removeParticipant}
-          onTransferHost={room.transferHost}
-        />
+        <aside className="room-side">
+          <ParticipantRail
+            participants={room.participants}
+            selfUserId={room.userId}
+            canManage={room.canManage}
+            onAssignRole={room.assignRole}
+            onRemove={room.removeParticipant}
+            onTransferHost={room.transferHost}
+          />
+          <RoomChatPanel
+            isHost={room.isHost}
+            selfUserId={room.userId}
+            permissions={room.permissions}
+            everyoneMessages={room.everyoneMessages}
+            hostMessages={room.hostMessages}
+            connectionLive={room.connection === 'live'}
+            onSetPermissions={room.setChatPermissions}
+            onSendChat={room.sendChat}
+          />
+        </aside>
       </div>
 
       <div className="toast-stack" aria-live="polite">

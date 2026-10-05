@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { validateVideoInput } from '@/shared/lib/validation';
 
 type PlaybackDockProps = {
@@ -13,6 +13,7 @@ type PlaybackDockProps = {
   onSkip: (deltaSeconds: number) => void;
   onToggleCaptions: () => void;
   onChangeVideo: (input: string) => void;
+  onScrubbingChange?: (scrubbing: boolean) => void;
 };
 
 function formatTime(totalSeconds: number): string {
@@ -34,17 +35,39 @@ export function PlaybackDock({
   onSkip,
   onToggleCaptions,
   onChangeVideo,
+  onScrubbingChange,
 }: PlaybackDockProps) {
   const [videoInput, setVideoInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [scrubbing, setScrubbing] = useState(false);
   const [scrubValue, setScrubValue] = useState(currentTime);
+  const scrubbingRef = useRef(false);
+  const scrubValueRef = useRef(currentTime);
 
   useEffect(() => {
-    if (!scrubbing) {
+    if (!scrubbingRef.current) {
       setScrubValue(currentTime || 0);
+      scrubValueRef.current = currentTime || 0;
     }
-  }, [currentTime, scrubbing]);
+  }, [currentTime]);
+
+  const setScrubbingState = (next: boolean) => {
+    scrubbingRef.current = next;
+    setScrubbing(next);
+    onScrubbingChange?.(next);
+  };
+
+  const commitScrub = () => {
+    if (!scrubbingRef.current) return;
+    const value = scrubValueRef.current;
+    setScrubbingState(false);
+    onSeek(value);
+  };
+
+  const beginScrub = (event: ReactPointerEvent<HTMLInputElement>) => {
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setScrubbingState(true);
+  };
 
   const submitVideo = (event: FormEvent) => {
     event.preventDefault();
@@ -83,24 +106,31 @@ export function PlaybackDock({
     <div className="dock">
       <div className="progress-block">
         <input
-          className="progress-bar"
+          className={`progress-bar ${scrubbing ? 'is-scrubbing' : ''}`}
           type="range"
           min={0}
           max={progressMax}
-          step={0.25}
+          step={0.1}
           value={Math.min(scrubValue, progressMax)}
           aria-label="Video progress"
-          onMouseDown={() => setScrubbing(true)}
-          onTouchStart={() => setScrubbing(true)}
-          onChange={(event) => setScrubValue(Number(event.target.value))}
-          onMouseUp={(event) => {
-            setScrubbing(false);
-            onSeek(Number(event.currentTarget.value));
+          onPointerDown={beginScrub}
+          onPointerMove={(event) => {
+            if (!scrubbingRef.current) return;
+            const next = Number(event.currentTarget.value);
+            scrubValueRef.current = next;
+            setScrubValue(next);
           }}
-          onTouchEnd={(event) => {
-            setScrubbing(false);
-            onSeek(Number(event.currentTarget.value));
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            scrubValueRef.current = next;
+            setScrubValue(next);
+            if (!scrubbingRef.current) {
+              setScrubbingState(true);
+            }
           }}
+          onPointerUp={commitScrub}
+          onPointerCancel={commitScrub}
+          onLostPointerCapture={commitScrub}
         />
         <div className="progress-times">
           <span>{formatTime(scrubValue)}</span>

@@ -7,6 +7,10 @@ import com.watchparty.dto.websocket.LeaveRoomWsRequest;
 import com.watchparty.dto.websocket.PlaybackControlWsRequest;
 import com.watchparty.dto.websocket.RemoveParticipantWsRequest;
 import com.watchparty.dto.websocket.SeekWsRequest;
+import com.watchparty.dto.websocket.SendChatWsRequest;
+import com.watchparty.dto.websocket.SendReactionWsRequest;
+import com.watchparty.dto.websocket.SetChatPermissionsWsRequest;
+import com.watchparty.dto.websocket.SyncTimeWsRequest;
 import com.watchparty.dto.websocket.TransferHostWsRequest;
 import com.watchparty.service.RoomRealtimeService;
 import jakarta.validation.Valid;
@@ -53,6 +57,11 @@ public class RoomWsController {
         roomRealtimeService.seek(request, accessor);
     }
 
+    @MessageMapping("/room.syncTime")
+    public void syncTime(@Valid @Payload SyncTimeWsRequest request, SimpMessageHeaderAccessor accessor) {
+        roomRealtimeService.syncTime(request, accessor);
+    }
+
     @MessageMapping("/room.changeVideo")
     public void changeVideo(@Valid @Payload ChangeVideoWsRequest request, SimpMessageHeaderAccessor accessor) {
         roomRealtimeService.changeVideo(request, accessor);
@@ -74,5 +83,23 @@ public class RoomWsController {
     @MessageMapping("/room.transferHost")
     public void transferHost(@Valid @Payload TransferHostWsRequest request, SimpMessageHeaderAccessor accessor) {
         roomRealtimeService.transferHost(request, accessor);
+    }
+
+    @MessageMapping("/room.setChatPermissions")
+    public void setChatPermissions(
+            @Valid @Payload SetChatPermissionsWsRequest request,
+            SimpMessageHeaderAccessor accessor
+    ) {
+        roomRealtimeService.setChatPermissions(request, accessor);
+    }
+
+    @MessageMapping("/room.sendChat")
+    public void sendChat(@Valid @Payload SendChatWsRequest request, SimpMessageHeaderAccessor accessor) {
+        roomRealtimeService.sendChat(request, accessor);
+    }
+
+    @MessageMapping("/room.sendReaction")
+    public void sendReaction(@Valid @Payload SendReactionWsRequest request, SimpMessageHeaderAccessor accessor) {
+        roomRealtimeService.sendReaction(request, accessor);
     }
 }

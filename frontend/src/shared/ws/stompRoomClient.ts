@@ -1,6 +1,6 @@
 import { Client, type IMessage, type StompSubscription } from '@stomp/stompjs';
 import { env } from '@/shared/config/env';
-import type { RoomRole, WsRoomEvent } from '@/shared/types/room';
+import type { ChatChannel, ChatPermissions, RoomRole, WsRoomEvent } from '@/shared/types/room';
 import { wsDestinations } from '@/shared/ws/wsClient';
 
 function toWebSocketUrl(url: string): string {
@@ -123,8 +123,24 @@ export class StompRoomClient {
     this.publish(wsDestinations.seek, { roomId, time });
   }
 
+  syncTime(roomId: string, time: number): void {
+    this.publish(wsDestinations.syncTime, { roomId, time });
+  }
+
   changeVideo(roomId: string, videoId: string): void {
     this.publish(wsDestinations.changeVideo, { roomId, videoId });
+  }
+
+  setChatPermissions(roomId: string, permissions: Partial<ChatPermissions>): void {
+    this.publish(wsDestinations.setChatPermissions, { roomId, ...permissions });
+  }
+
+  sendChat(roomId: string, channel: ChatChannel, text: string): void {
+    this.publish(wsDestinations.sendChat, { roomId, channel, text });
+  }
+
+  sendReaction(roomId: string, emoji: string): void {
+    this.publish(wsDestinations.sendReaction, { roomId, emoji });
   }
 
   assignRole(roomId: string, userId: string, role: RoomRole): void {

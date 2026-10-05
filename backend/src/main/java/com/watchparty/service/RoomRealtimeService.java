@@ -3,12 +3,19 @@ package com.watchparty.service;
 import com.watchparty.dto.response.ParticipantResponse;
 import com.watchparty.dto.websocket.AssignRoleWsRequest;
 import com.watchparty.dto.websocket.ChangeVideoWsRequest;
+import com.watchparty.dto.websocket.ChatMessagePayload;
+import com.watchparty.dto.websocket.ChatPermissionsPayload;
 import com.watchparty.dto.websocket.JoinRoomWsRequest;
 import com.watchparty.dto.websocket.LeaveRoomWsRequest;
 import com.watchparty.dto.websocket.PlaybackControlWsRequest;
 import com.watchparty.dto.websocket.PlaybackStatePayload;
+import com.watchparty.dto.websocket.ReactionPayload;
 import com.watchparty.dto.websocket.RemoveParticipantWsRequest;
 import com.watchparty.dto.websocket.SeekWsRequest;
+import com.watchparty.dto.websocket.SendChatWsRequest;
+import com.watchparty.dto.websocket.SendReactionWsRequest;
+import com.watchparty.dto.websocket.SetChatPermissionsWsRequest;
+import com.watchparty.dto.websocket.SyncTimeWsRequest;
 import com.watchparty.dto.websocket.TransferHostWsRequest;
 import com.watchparty.dto.websocket.WsEventType;
 import com.watchparty.dto.websocket.WsRoomEvent;
@@ -16,11 +23,16 @@ import com.watchparty.exception.BadRequestException;
 import com.watchparty.exception.ForbiddenException;
 import com.watchparty.model.document.Participant;
 import com.watchparty.model.document.Room;
+import com.watchparty.model.enums.RoomRole;
+import com.watchparty.websocket.RoomInteractionStore;
 import com.watchparty.websocket.RoomPresenceTracker;
 import com.watchparty.websocket.WsEventPublisher;
 import com.watchparty.websocket.WsSessionKeys;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
+import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.stereotype.Service;
@@ -29,20 +41,27 @@ import org.springframework.stereotype.Service;
 @ConditionalOnProperty(name = "app.mongodb.enabled", havingValue = "true")
 public class RoomRealtimeService {
 
+    private static final Set<String> ALLOWED_REACTIONS = Set.of(
+            "👍", "👏", "❤️", "😂", "😮", "🔥", "🎉", "😢"
+    );
+
     private final RoomService roomService;
     private final RoomMapper roomMapper;
     private final RoomPresenceTracker presenceTracker;
+    private final RoomInteractionStore interactionStore;
     private final WsEventPublisher eventPublisher;
 
     public RoomRealtimeService(
             RoomService roomService,
             RoomMapper roomMapper,
             RoomPresenceTracker presenceTracker,
+            RoomInteractionStore interactionStore,
             WsEventPublisher eventPublisher
     ) {
         this.roomService = roomService;
         this.roomMapper = roomMapper;
         this.presenceTracker = presenceTracker;
+        this.interactionStore = interactionStore;
         this.eventPublisher = eventPublisher;
     }
 
@@ -58,6 +77,7 @@ public class RoomRealtimeService {
 
         PlaybackStatePayload state = toState(room);
         List<ParticipantResponse> participants = toParticipants(room);
+        ChatPermissionsPayload permissions = interactionStore.getPermissions(room.getId());
 
         WsRoomEvent syncEvent = WsRoomEvent.of(
                 WsEventType.SYNC_STATE,
@@ -67,7 +87,10 @@ public class RoomRealtimeService {
                 null,
                 "Room state synchronized",
                 state,
-                participants
+                participants,
+                permissions,
+                null,
+                null
         );
         eventPublisher.sendToSession(sessionId, syncEvent);
 
@@ -183,6 +206,175 @@ public class RoomRealtimeService {
                 request.userId(),
                 "Host transferred"
         );
+    }
+
+    public void syncTime(SyncTimeWsRequest request, SimpMessageHeaderAccessor accessor) {
+        SessionActor actor = requireActorInRoom(accessor, request.roomId());
+        Room room = roomService.seek(actor.roomId(), actor.userId(), request.time());
+        eventPublisher.sendToRoom(
+                room.getId(),
+                WsRoomEvent.of(
+                        WsEventType.TIME_SYNC,
+                        room.getId(),
+                        actor.userId(),
+                        actor.username(),
+                        null,
+                        null,
+                        toState(room),
+                        null
+                )
+        );
+    }
+
+    public void setChatPermissions(SetChatPermissionsWsRequest request, SimpMessageHeaderAccessor accessor) {
+        SessionActor actor = requireActorInRoom(accessor, request.roomId());
+        Room room = roomService.requireActiveRoom(actor.roomId());
+        Participant hostActor = roomService.requireParticipant(room, actor.userId());
+        if (hostActor.getRole() != RoomRole.HOST) {
+            throw new ForbiddenException("Only the host can change chat and reaction permissions");
+        }
+        if (request.chatWithHostEnabled() == null
+                && request.chatWithEveryoneEnabled() == null
+                && request.reactionsEnabled() == null) {
+            throw new BadRequestException("Provide at least one permission to update");
+        }
+
+        ChatPermissionsPayload permissions = interactionStore.updatePermissions(
+                room.getId(),
+                request.chatWithHostEnabled(),
+                request.chatWithEveryoneEnabled(),
+                request.reactionsEnabled()
+        );
+
+        eventPublisher.sendToRoom(
+                room.getId(),
+                WsRoomEvent.of(
+                        WsEventType.CHAT_PERMISSIONS,
+                        room.getId(),
+                        actor.userId(),
+                        actor.username(),
+                        null,
+                        "Chat permissions updated",
+                        null,
+                        null,
+                        permissions,
+                        null,
+                        null
+                )
+        );
+    }
+
+    public void sendChat(SendChatWsRequest request, SimpMessageHeaderAccessor accessor) {
+        SessionActor actor = requireActorInRoom(accessor, request.roomId());
+        Room room = roomService.requireActiveRoom(actor.roomId());
+        roomService.requireParticipant(room, actor.userId());
+
+        String channel = normalizeChatChannel(request.channel());
+        String text = request.text() == null ? "" : request.text().trim();
+        if (text.isEmpty()) {
+            throw new BadRequestException("Message cannot be empty");
+        }
+        if (text.length() > 300) {
+            throw new BadRequestException("Message must be at most 300 characters");
+        }
+
+        ChatPermissionsPayload permissions = interactionStore.getPermissions(room.getId());
+        boolean isHost = actor.userId().equals(room.getHostUserId());
+
+        if ("EVERYONE".equals(channel)) {
+            if (!permissions.chatWithEveryoneEnabled() && !isHost) {
+                throw new ForbiddenException("The host has not enabled chat with everyone");
+            }
+        } else if ("HOST".equals(channel)) {
+            if (!permissions.chatWithHostEnabled() && !isHost) {
+                throw new ForbiddenException("The host has not enabled chat with host");
+            }
+        } else {
+            throw new BadRequestException("Channel must be HOST or EVERYONE");
+        }
+
+        ChatMessagePayload chat = new ChatMessagePayload(
+                UUID.randomUUID().toString(),
+                channel,
+                text,
+                actor.userId(),
+                actor.username()
+        );
+
+        WsRoomEvent event = WsRoomEvent.of(
+                WsEventType.CHAT_MESSAGE,
+                room.getId(),
+                actor.userId(),
+                actor.username(),
+                null,
+                null,
+                null,
+                null,
+                null,
+                chat,
+                null
+        );
+
+        if ("EVERYONE".equals(channel)) {
+            eventPublisher.sendToRoom(room.getId(), event);
+            return;
+        }
+
+        // Host channel stays private between the sender and the host (ephemeral, not stored).
+        Set<String> recipients = new HashSet<>();
+        recipients.addAll(presenceTracker.sessionIdsForUser(room.getId(), room.getHostUserId()));
+        recipients.addAll(presenceTracker.sessionIdsForUser(room.getId(), actor.userId()));
+        for (String sessionId : recipients) {
+            eventPublisher.sendToSession(sessionId, event);
+        }
+    }
+
+    public void sendReaction(SendReactionWsRequest request, SimpMessageHeaderAccessor accessor) {
+        SessionActor actor = requireActorInRoom(accessor, request.roomId());
+        Room room = roomService.requireActiveRoom(actor.roomId());
+        roomService.requireParticipant(room, actor.userId());
+
+        ChatPermissionsPayload permissions = interactionStore.getPermissions(room.getId());
+        boolean isHost = actor.userId().equals(room.getHostUserId());
+        if (!permissions.reactionsEnabled() && !isHost) {
+            throw new ForbiddenException("The host has not enabled reactions");
+        }
+
+        String emoji = request.emoji() == null ? "" : request.emoji().trim();
+        if (!ALLOWED_REACTIONS.contains(emoji)) {
+            throw new BadRequestException("That reaction is not allowed");
+        }
+
+        ReactionPayload reaction = new ReactionPayload(
+                UUID.randomUUID().toString(),
+                emoji,
+                actor.userId(),
+                actor.username()
+        );
+
+        eventPublisher.sendToRoom(
+                room.getId(),
+                WsRoomEvent.of(
+                        WsEventType.REACTION,
+                        room.getId(),
+                        actor.userId(),
+                        actor.username(),
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        reaction
+                )
+        );
+    }
+
+    private String normalizeChatChannel(String channel) {
+        if (channel == null) {
+            return "";
+        }
+        return channel.trim().toUpperCase(Locale.ROOT);
     }
 
     private void handleLeave(
