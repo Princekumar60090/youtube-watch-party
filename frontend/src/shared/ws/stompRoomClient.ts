@@ -20,21 +20,34 @@ export class StompRoomClient {
   private client: Client | null = null;
   private subscriptions: StompSubscription[] = [];
   private roomId: string | null = null;
+  /** Bumps on every connect/disconnect so stale socket callbacks are ignored. */
+  private generation = 0;
+  private intentionalClose = false;
 
   connect(roomId: string, userId: string, handlers: RoomSocketHandlers): void {
     this.disconnect();
+    this.intentionalClose = false;
+    const generation = ++this.generation;
     this.roomId = roomId;
 
     const client = new Client({
       brokerURL: toWebSocketUrl(env.wsUrl),
-      reconnectDelay: 3000,
+      reconnectDelay: 5000,
+      connectionTimeout: 20000,
       heartbeatIncoming: 10000,
       heartbeatOutgoing: 10000,
       onConnect: () => {
+        if (generation !== this.generation) {
+          return;
+        }
+
         this.subscriptions.forEach((sub) => sub.unsubscribe());
         this.subscriptions = [];
 
         const onMessage = (message: IMessage) => {
+          if (generation !== this.generation) {
+            return;
+          }
           try {
             const event = JSON.parse(message.body) as WsRoomEvent;
             handlers.onEvent(event);
@@ -58,10 +71,22 @@ export class StompRoomClient {
         handlers.onConnected?.();
       },
       onStompError: (frame) => {
+        if (generation !== this.generation) {
+          return;
+        }
         handlers.onError?.(frame.headers.message || 'WebSocket connection error');
       },
       onWebSocketClose: () => {
+        if (generation !== this.generation || this.intentionalClose) {
+          return;
+        }
         handlers.onDisconnected?.();
+      },
+      onWebSocketError: () => {
+        if (generation !== this.generation) {
+          return;
+        }
+        handlers.onError?.('WebSocket connection error');
       },
     });
 
@@ -115,16 +140,24 @@ export class StompRoomClient {
   }
 
   disconnect(): void {
+    this.intentionalClose = true;
+    this.generation += 1;
     this.subscriptions.forEach((sub) => sub.unsubscribe());
     this.subscriptions = [];
-    if (this.client) {
-      void this.client.deactivate();
-      this.client = null;
-    }
+    const client = this.client;
+    this.client = null;
     this.roomId = null;
+    if (client) {
+      client.reconnectDelay = 0;
+      void client.deactivate();
+    }
   }
 
   get activeRoomId(): string | null {
     return this.roomId;
+  }
+
+  get isConnected(): boolean {
+    return Boolean(this.client?.connected);
   }
 }

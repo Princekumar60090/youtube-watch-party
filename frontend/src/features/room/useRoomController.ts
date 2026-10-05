@@ -80,6 +80,10 @@ export function useRoomController(roomId: string) {
     [],
   );
 
+  const handleEventRef = useRef<(event: WsRoomEvent) => void>(() => undefined);
+  const pushToastRef = useRef(pushToast);
+  pushToastRef.current = pushToast;
+
   const handleEvent = useCallback(
     (event: WsRoomEvent) => {
       if (event.state) {
@@ -134,10 +138,13 @@ export function useRoomController(roomId: string) {
     [applyParticipants, friendlyError, pushToast, userId],
   );
 
+  handleEventRef.current = handleEvent;
+
   useEffect(() => {
     if (!session) return;
 
     let cancelled = false;
+    const connectUserId = session.userId;
 
     getRoomById(roomId)
       .then((room) => {
@@ -163,13 +170,23 @@ export function useRoomController(roomId: string) {
       });
 
     setConnection('connecting');
-    socketRef.current.connect(roomId, session.userId, {
-      onEvent: handleEvent,
-      onConnected: () => setConnection('live'),
-      onDisconnected: () => setConnection('reconnecting'),
+    socketRef.current.connect(roomId, connectUserId, {
+      onEvent: (event) => handleEventRef.current(event),
+      onConnected: () => {
+        if (!cancelled) {
+          setConnection('live');
+        }
+      },
+      onDisconnected: () => {
+        if (!cancelled) {
+          setConnection('reconnecting');
+        }
+      },
       onError: (message) => {
-        setConnection('offline');
-        pushToast(message, 'error');
+        if (!cancelled) {
+          setConnection('reconnecting');
+          pushToastRef.current(message, 'error');
+        }
       },
     });
 
@@ -177,7 +194,7 @@ export function useRoomController(roomId: string) {
       cancelled = true;
       socketRef.current.disconnect();
     };
-  }, [handleEvent, pushToast, roomId, session]);
+  }, [roomId, session?.userId]);
 
   const guarded = useCallback(
     (action: () => void) => {
