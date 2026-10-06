@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { ParticipantRail } from '@/features/room/ParticipantRail';
 import { PlaybackDock } from '@/features/room/PlaybackDock';
 import { ReactionBar } from '@/features/room/ReactionBar';
@@ -21,6 +21,11 @@ export function RoomPage() {
   const [duration, setDuration] = useState(0);
   const [displayTime, setDisplayTime] = useState(0);
   const [captionsOn, setCaptionsOn] = useState(false);
+
+  // No local session yet — send them to the invite join page (name only, no code).
+  if (!room.session && roomId) {
+    return <Navigate to={`/join/${roomId}`} replace />;
+  }
 
   if (room.bootError || !room.session) {
     return (
@@ -75,6 +80,21 @@ export function RoomPage() {
             }}
           >
             Copy code
+          </button>
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={async () => {
+              try {
+                const inviteUrl = `${window.location.origin}/join/${roomId}`;
+                await navigator.clipboard.writeText(inviteUrl);
+                room.notify('Invite link copied', 'success');
+              } catch {
+                room.notify('Could not copy the invite link', 'error');
+              }
+            }}
+          >
+            Copy link
           </button>
           <button
             type="button"

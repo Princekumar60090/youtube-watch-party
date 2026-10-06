@@ -66,8 +66,8 @@ export function HomePage() {
         <p className="brand-mark">WatchParty</p>
         <h1>{headline}</h1>
         <p className="landing-lede">
-          Host controls playback for everyone. Guests stay in sync automatically with clear roles
-          and permissions.
+          Host controls playback for everyone. Guests can join with a room code or an invite link,
+          then stay in sync automatically with clear roles and permissions.
         </p>
 
         <div className="mode-switch" role="tablist" aria-label="Room entry mode">
