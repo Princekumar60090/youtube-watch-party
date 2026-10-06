@@ -91,10 +91,14 @@ Open `http://localhost:5173`
 
 1. Start backend and frontend
 2. Create a room with your name (you become Host)
-3. Copy the room code and join from another browser/profile
+3. Invite others with **Copy code** or **Copy link**
+   - Code join: home → Join room → enter code + name
+   - Link join: open `/join/{roomId}` → enter name only (no code) → join as Participant
 4. Host/Moderator can load a YouTube link, play/pause, scrub, skip ±10s, and toggle captions
 5. Participants can only watch — they cannot control playback
 6. Host can manage roles, transfer host, or remove participants
+7. Host can enable live **chat with host**, **chat with everyone**, and **emoji reactions** (ephemeral; not stored in MongoDB)
+8. Watching list shows currently connected people; brief reconnects do not spam left/joined toasts
 
 ## Deploy
 
@@ -205,9 +209,11 @@ If you deployed backend before knowing the exact Vercel domain:
 
 ### Notes
 
-- **Free Render** services sleep after inactivity; the first request (and WebSocket) may take ~30–60s to wake up.
+- **Free Render** services sleep after ~15 minutes of inactivity; the first request (and WebSocket) may take ~30–60s to wake up.
+- Optional: ping `https://YOUR_RENDER_URL/actuator/health` every 5–14 minutes with a free cron (e.g. cron-job.org) to reduce sleep.
 - Vite embeds `VITE_*` at **build time** — change them on Vercel and **redeploy** the frontend.
 - WebSockets must stay on the same Render **Web Service** (not a static site).
+- Invite links look like `https://YOUR_VERCEL_APP.vercel.app/join/{roomId}`.
 
 ## Profiles
 
@@ -238,6 +244,12 @@ Example join-by-code body:
 { "roomCode": "ABC123", "username": "GuestUser" }
 ```
 
+Example join-by-id body (`POST /api/v1/rooms/{roomId}/join` — used by invite links):
+
+```json
+{ "username": "GuestUser" }
+```
+
 ## WebSocket realtime API
 
 Endpoint: `ws://localhost:8080/ws` (production: `wss://YOUR_RENDER_URL/ws`)
@@ -255,11 +267,17 @@ Flow:
 | `/app/room.play` | `{ roomId, currentTime? }` | Host / Moderator |
 | `/app/room.pause` | `{ roomId, currentTime? }` | Host / Moderator |
 | `/app/room.seek` | `{ roomId, time }` | Host / Moderator |
+| `/app/room.syncTime` | `{ roomId, time }` | Host / Moderator (background sync) |
 | `/app/room.changeVideo` | `{ roomId, videoId }` | Host / Moderator |
 | `/app/room.assignRole` | `{ roomId, userId, role }` | Host |
 | `/app/room.removeParticipant` | `{ roomId, userId }` | Host |
 | `/app/room.transferHost` | `{ roomId, userId }` | Host |
+| `/app/room.setChatPermissions` | `{ roomId, chatWithHostEnabled?, chatWithEveryoneEnabled?, reactionsEnabled? }` | Host |
+| `/app/room.sendChat` | `{ roomId, channel: HOST\|EVERYONE, text }` | Allowed by host permissions (host always allowed) |
+| `/app/room.sendReaction` | `{ roomId, emoji }` | Allowed when reactions enabled (host always allowed) |
 
-Server events on `/topic/rooms/{roomId}`: `SYNC_STATE`, `PLAY`, `PAUSE`, `SEEK`, `CHANGE_VIDEO`, `USER_JOINED`, `USER_LEFT`, `ROLE_ASSIGNED`, `PARTICIPANT_REMOVED`, `HOST_TRANSFERRED`, `ERROR`.
+Server events: `SYNC_STATE`, `PLAY`, `PAUSE`, `SEEK`, `TIME_SYNC`, `CHANGE_VIDEO`, `USER_JOINED`, `USER_LEFT`, `ROLE_ASSIGNED`, `PARTICIPANT_REMOVED`, `HOST_TRANSFERRED`, `CHAT_PERMISSIONS`, `CHAT_MESSAGE`, `REACTION`, `ERROR`.
 
-Server keeps authoritative `videoId`, `playState`, and `currentTime` in MongoDB and rejects unauthorized control events.
+- Playback state (`videoId`, `playState`, `currentTime`) is authoritative in MongoDB.
+- Chat messages and reactions are **ephemeral** (WebSocket only; not stored in MongoDB).
+- Unauthorized control / chat / reaction events are rejected.
